@@ -1,0 +1,20 @@
+[Unit]
+Description=Clawd Bot - Codex Task Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+ExecStart=/home/ec2-user/clawd-bot/daemon/codex-runner.sh
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+Environment="HOME=/home/ec2-user"
+Environment="PATH=/home/ec2-user/.local/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-/home/ec2-user/.codex-env
+
+[Install]
+WantedBy=multi-user.target

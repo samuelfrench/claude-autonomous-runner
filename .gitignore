@@ -1,0 +1,6 @@
+.env
+*.pem
+*.key
+.credentials.json
+.clawd-env
+.codex-env

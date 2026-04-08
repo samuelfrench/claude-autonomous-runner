@@ -1,0 +1,12 @@
+{
+  "my-project": {
+    "repo": "git@github.com:your-username/my-project.git",
+    "branch": "main",
+    "autonomous": {
+      "enabled": true,
+      "goal": "Your autonomous goal here. The agent reads TODO.md, picks the highest-leverage task, does it, and re-queues itself.",
+      "cooldown_minutes": 30,
+      "effort": "high"
+    }
+  }
+}

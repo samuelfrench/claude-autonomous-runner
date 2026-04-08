@@ -1,0 +1,93 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../.env"
+CONFIG_FILE="$SCRIPT_DIR/../config/projects.json"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "Error: .env not found. Run infrastructure/setup.sh first."
+    exit 1
+fi
+source "$ENV_FILE"
+
+PROVIDER="claude"
+
+# Parse --provider flag
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --provider)
+            PROVIDER="$2"
+            shift 2
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${ARGS[@]}"
+
+if [ $# -lt 2 ]; then
+    echo "Usage: clawd <project> \"<task description>\" [--provider claude|codex]"
+    echo ""
+    echo "Available projects:"
+    jq -r 'keys[]' "$CONFIG_FILE" | sed 's/^/  - /'
+    exit 1
+fi
+
+PROJECT=$1
+shift
+PROMPT="$*"
+TASK_ID="task-$(date +%Y%m%d-%H%M%S)-$$"
+
+# Validate project exists
+if ! jq -e ".[\"$PROJECT\"]" "$CONFIG_FILE" > /dev/null 2>&1; then
+    echo "Error: Unknown project '$PROJECT'"
+    echo "Available projects:"
+    jq -r 'keys[]' "$CONFIG_FILE" | sed 's/^/  - /'
+    exit 1
+fi
+
+# Validate provider
+if [ "$PROVIDER" != "claude" ] && [ "$PROVIDER" != "codex" ]; then
+    echo "Error: Unknown provider '$PROVIDER'. Use 'claude' or 'codex'."
+    exit 1
+fi
+
+# Choose queue based on provider
+if [ "$PROVIDER" = "codex" ]; then
+    QUEUE_URL="$CLAWD_CODEX_QUEUE_URL"
+else
+    QUEUE_URL="$CLAWD_QUEUE_URL"
+fi
+
+SUBMITTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Send to SQS
+MESSAGE=$(jq -n \
+    --arg project "$PROJECT" \
+    --arg prompt "$PROMPT" \
+    --arg task_id "$TASK_ID" \
+    --arg provider "$PROVIDER" \
+    --arg submitted_at "$SUBMITTED_AT" \
+    '{project: $project, prompt: $prompt, task_id: $task_id, provider: $provider, submitted_at: $submitted_at}')
+
+aws sqs send-message \
+    --queue-url "$QUEUE_URL" \
+    --message-body "$MESSAGE" \
+    --region "$CLAWD_REGION" > /dev/null
+
+# Record in DynamoDB
+aws dynamodb put-item \
+    --table-name "${CLAWD_DYNAMO_TABLE:-clawd-bot-tasks}" \
+    --item "{\"task_id\":{\"S\":\"$TASK_ID\"},\"project\":{\"S\":\"$PROJECT\"},\"provider\":{\"S\":\"$PROVIDER\"},\"prompt\":{\"S\":$(printf '%s' "$PROMPT" | jq -Rs .)},\"status\":{\"S\":\"pending\"},\"submitted_at\":{\"S\":\"$SUBMITTED_AT\"}}" \
+    --region "$CLAWD_REGION" 2>/dev/null || echo "Warning: DynamoDB write failed"
+
+echo "Task submitted: $TASK_ID"
+echo "  Project:  $PROJECT"
+echo "  Provider: $PROVIDER"
+echo "  Prompt:   $PROMPT"
+echo ""
+echo "Email notification when complete."

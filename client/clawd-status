@@ -1,0 +1,85 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "Error: .env not found. Run infrastructure/setup.sh first."
+    exit 1
+fi
+source "$ENV_FILE"
+
+echo "=== Clawd-Bot Status ==="
+echo ""
+
+# Claude queue stats
+ATTRS=$(aws sqs get-queue-attributes \
+    --queue-url "$CLAWD_QUEUE_URL" \
+    --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+    --region "$CLAWD_REGION" --output json)
+PENDING=$(echo "$ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessages')
+IN_FLIGHT=$(echo "$ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible')
+echo "Claude Queue:  $PENDING pending, $IN_FLIGHT in-flight"
+
+# Codex queue stats
+if [ -n "${CLAWD_CODEX_QUEUE_URL:-}" ]; then
+    CODEX_ATTRS=$(aws sqs get-queue-attributes \
+        --queue-url "$CLAWD_CODEX_QUEUE_URL" \
+        --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+        --region "$CLAWD_REGION" --output json)
+    CODEX_PENDING=$(echo "$CODEX_ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessages')
+    CODEX_IN_FLIGHT=$(echo "$CODEX_ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible')
+    echo "Codex Queue:   $CODEX_PENDING pending, $CODEX_IN_FLIGHT in-flight"
+fi
+
+# DLQ stats
+DLQ_ATTRS=$(aws sqs get-queue-attributes \
+    --queue-url "$CLAWD_DLQ_URL" \
+    --attribute-names ApproximateNumberOfMessages \
+    --region "$CLAWD_REGION" --output json)
+DLQ_COUNT=$(echo "$DLQ_ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessages')
+echo "DLQ:           $DLQ_COUNT failed"
+
+# Instance status
+echo ""
+STATE=$(aws ec2 describe-instances \
+    --instance-ids "$CLAWD_INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].State.Name' \
+    --output text --region "$CLAWD_REGION" 2>/dev/null || echo "unknown")
+echo "Instance: $CLAWD_INSTANCE_ID ($STATE)"
+echo "IP:       $CLAWD_PUBLIC_IP"
+echo "SSH:      ssh -i clawd-bot.pem ec2-user@$CLAWD_PUBLIC_IP"
+echo "Logs:     ssh -i clawd-bot.pem ec2-user@$CLAWD_PUBLIC_IP journalctl -u clawd-runner -f"
+
+# Recent tasks from DynamoDB
+echo ""
+echo "=== Recent Tasks ==="
+TASKS=$(aws dynamodb query \
+    --table-name "${CLAWD_DYNAMO_TABLE:-clawd-bot-tasks}" \
+    --index-name provider-submitted-index \
+    --key-condition-expression "provider = :p" \
+    --expression-attribute-values '{":p":{"S":"claude"}}' \
+    --scan-index-forward false \
+    --limit 5 \
+    --projection-expression "task_id, project, #s, submitted_at" \
+    --expression-attribute-names '{"#s":"status"}' \
+    --region "$CLAWD_REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+
+CODEX_TASKS=$(aws dynamodb query \
+    --table-name "${CLAWD_DYNAMO_TABLE:-clawd-bot-tasks}" \
+    --index-name provider-submitted-index \
+    --key-condition-expression "provider = :p" \
+    --expression-attribute-values '{":p":{"S":"codex"}}' \
+    --scan-index-forward false \
+    --limit 5 \
+    --projection-expression "task_id, project, #s, submitted_at" \
+    --expression-attribute-names '{"#s":"status"}' \
+    --region "$CLAWD_REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+
+echo ""
+echo "Claude:"
+echo "$TASKS" | jq -r '.Items[] | "  \(.task_id.S)  \(.project.S)  \(.status.S)  \(.submitted_at.S)"' 2>/dev/null || echo "  (none)"
+echo ""
+echo "Codex:"
+echo "$CODEX_TASKS" | jq -r '.Items[] | "  \(.task_id.S)  \(.project.S)  \(.status.S)  \(.submitted_at.S)"' 2>/dev/null || echo "  (none)"

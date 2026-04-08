@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clawd-bot</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --purple: #bc8cff;
+    --font: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+
+  /* Header */
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header h1 span { color: var(--accent); }
+  .header-right { display: flex; gap: 12px; align-items: center; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.err { background: var(--red); }
+
+  /* Auth */
+  #auth-screen { text-align: center; padding: 80px 20px; }
+  #auth-screen input { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 10px 16px; font-family: var(--font); font-size: 13px; width: 360px; border-radius: 6px; }
+  #auth-screen button { background: var(--accent); color: var(--bg); border: none; padding: 10px 20px; font-family: var(--font); font-size: 13px; cursor: pointer; border-radius: 6px; margin-left: 8px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .tab { padding: 8px 16px; cursor: pointer; color: var(--text-dim); border-bottom: 2px solid transparent; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Submit Form */
+  .form-group { margin-bottom: 12px; }
+  .form-group label { display: block; color: var(--text-dim); margin-bottom: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .form-group select, .form-group textarea { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; font-family: var(--font); font-size: 13px; width: 100%; border-radius: 6px; }
+  .form-group textarea { min-height: 80px; resize: vertical; }
+  .provider-toggle { display: flex; gap: 0; }
+  .provider-btn { padding: 6px 16px; cursor: pointer; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  .provider-btn:first-child { border-radius: 6px 0 0 6px; }
+  .provider-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .provider-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .submit-btn { background: var(--green); color: var(--bg); border: none; padding: 8px 20px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 6px; }
+  .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Task Table */
+  .task-table { width: 100%; border-collapse: collapse; }
+  .task-table th { text-align: left; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .task-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .task-table tr:hover { background: var(--surface); cursor: pointer; }
+  .task-table tr.selected { background: #1c2433; }
+
+  /* Status badges */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .badge.pending { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+  .badge.running { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+  .badge.completed { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+  .badge.failed, .badge.timed_out { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+
+  .provider-badge { font-size: 11px; color: var(--text-dim); }
+  .provider-badge.claude { color: var(--purple); }
+  .provider-badge.codex { color: var(--green); }
+
+  /* Task Detail */
+  .detail-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-top: 16px; }
+  .detail-panel h3 { font-size: 14px; margin-bottom: 12px; }
+  .detail-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .detail-meta-item { font-size: 12px; }
+  .detail-meta-item .label { color: var(--text-dim); }
+  .detail-output { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+  .detail-prompt { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; white-space: pre-wrap; font-size: 12px; color: var(--text-dim); max-height: 120px; overflow-y: auto; }
+
+  /* Filters */
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
+  .filter-btn { padding: 4px 12px; cursor: pointer; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); font-family: var(--font); font-size: 11px; border-radius: 12px; }
+  .filter-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
+  .refresh-info { color: var(--text-dim); font-size: 11px; margin-left: auto; }
+
+  .hidden { display: none; }
+  .flash { background: rgba(63, 185, 80, 0.15); border: 1px solid var(--green); border-radius: 6px; padding: 8px 12px; margin-bottom: 16px; color: var(--green); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Auth Screen -->
+  <div id="auth-screen">
+    <h1>clawd-bot</h1>
+    <p style="color: var(--text-dim); margin: 16px 0;">Enter API key to continue</p>
+    <div>
+      <input type="password" id="api-key-input" placeholder="API key">
+      <button onclick="authenticate()">Connect</button>
+    </div>
+    <p id="auth-error" style="color: var(--red); margin-top: 8px;" class="hidden"></p>
+  </div>
+
+  <!-- Main App -->
+  <div id="main-app" class="hidden">
+    <header>
+      <h1><span>clawd</span>-bot</h1>
+      <div class="header-right">
+        <span class="status-dot ok" id="conn-status"></span>
+        <span style="color: var(--text-dim); font-size: 11px;" id="conn-text">Connected</span>
+        <button onclick="logout()" style="background: none; border: 1px solid var(--border); color: var(--text-dim); padding: 4px 10px; font-family: var(--font); font-size: 11px; cursor: pointer; border-radius: 4px;">Logout</button>
+      </div>
+    </header>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('tasks')">Tasks</div>
+      <div class="tab" onclick="switchTab('submit')">Submit</div>
+    </div>
+
+    <!-- Submit Tab -->
+    <div id="tab-submit" class="hidden">
+      <div id="submit-flash" class="flash hidden"></div>
+      <div class="form-group">
+        <label>Project</label>
+        <select id="project-select"></select>
+      </div>
+      <div class="form-group">
+        <label>Provider</label>
+        <div class="provider-toggle">
+          <button class="provider-btn active" onclick="setProvider('claude', this)">Claude</button>
+          <button class="provider-btn" onclick="setProvider('codex', this)">Codex</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Prompt</label>
+        <textarea id="prompt-input" placeholder="Describe the task..."></textarea>
+      </div>
+      <button class="submit-btn" id="submit-btn" onclick="submitTask()">Submit Task</button>
+    </div>
+
+    <!-- Tasks Tab -->
+    <div id="tab-tasks">
+      <div class="filters">
+        <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
+        <button class="filter-btn" onclick="setFilter('running', this)">Running</button>
+        <button class="filter-btn" onclick="setFilter('pending', this)">Pending</button>
+        <button class="filter-btn" onclick="setFilter('completed', this)">Completed</button>
+        <button class="filter-btn" onclick="setFilter('failed', this)">Failed</button>
+        <span class="filter-sep" style="color: var(--border);">|</span>
+        <button class="filter-btn" onclick="setProviderFilter('all', this)">All</button>
+        <button class="filter-btn" onclick="setProviderFilter('claude', this)">Claude</button>
+        <button class="filter-btn" onclick="setProviderFilter('codex', this)">Codex</button>
+        <span class="refresh-info" id="refresh-info">Auto-refresh: 30s</span>
+      </div>
+
+      <table class="task-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Provider</th>
+            <th>Project</th>
+            <th>Task ID</th>
+            <th>Submitted</th>
+          </tr>
+        </thead>
+        <tbody id="task-body"></tbody>
+      </table>
+
+      <div id="task-detail" class="detail-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_URL = '__API_URL__';
+// Check URL params for API key
+const urlParams = new URLSearchParams(window.location.search);
+let apiKey = urlParams.get('key') || localStorage.getItem('clawd-api-key') || '';
+// Clean URL if key was in params
+if (urlParams.has('key')) {
+  localStorage.setItem('clawd-api-key', apiKey);
+  window.history.replaceState({}, '', window.location.pathname);
+}
+let tasks = [];
+let selectedTask = null;
+let statusFilter = 'all';
+let providerFilter = 'all';
+let selectedProvider = 'claude';
+let refreshInterval;
+
+// Auth
+if (apiKey) {
+  testConnection();
+} else {
+  document.getElementById('api-key-input').focus();
+}
+
+function authenticate() {
+  apiKey = document.getElementById('api-key-input').value.trim();
+  if (!apiKey) return;
+  testConnection();
+}
+
+async function testConnection() {
+  try {
+    const res = await apiFetch('/projects');
+    if (res.ok) {
+      localStorage.setItem('clawd-api-key', apiKey);
+      document.getElementById('auth-screen').classList.add('hidden');
+      document.getElementById('main-app').classList.remove('hidden');
+      const data = await res.json();
+      populateProjects(data.projects || []);
+      loadTasks();
+      refreshInterval = setInterval(loadTasks, 30000);
+    } else {
+      showAuthError('Invalid API key');
+    }
+  } catch (e) {
+    showAuthError('Connection failed: ' + e.message);
+  }
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function logout() {
+  localStorage.removeItem('clawd-api-key');
+  apiKey = '';
+  clearInterval(refreshInterval);
+  document.getElementById('main-app').classList.add('hidden');
+  document.getElementById('auth-screen').classList.remove('hidden');
+  document.getElementById('api-key-input').value = '';
+}
+
+// API
+function apiFetch(path, opts = {}) {
+  return fetch(API_URL + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      ...(opts.headers || {})
+    }
+  });
+}
+
+// Projects
+function populateProjects(projects) {
+  const sel = document.getElementById('project-select');
+  sel.innerHTML = projects.map(p => `<option value="${p}">${p}</option>`).join('');
+}
+
+// Tabs
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab:nth-child(${tab === 'tasks' ? 1 : 2})`).classList.add('active');
+  document.getElementById('tab-tasks').classList.toggle('hidden', tab !== 'tasks');
+  document.getElementById('tab-submit').classList.toggle('hidden', tab !== 'submit');
+}
+
+// Provider toggle
+function setProvider(p, btn) {
+  selectedProvider = p;
+  document.querySelectorAll('.provider-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// Submit
+async function submitTask() {
+  const project = document.getElementById('project-select').value;
+  const prompt = document.getElementById('prompt-input').value.trim();
+  if (!prompt) return;
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    const res = await apiFetch('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ project, provider: selectedProvider, prompt })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      document.getElementById('prompt-input').value = '';
+      const flash = document.getElementById('submit-flash');
+      flash.textContent = `Task submitted: ${data.task_id}`;
+      flash.classList.remove('hidden');
+      setTimeout(() => flash.classList.add('hidden'), 5000);
+      switchTab('tasks');
+      loadTasks();
+    } else {
+      alert('Error: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Submit failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Submit Task';
+  }
+}
+
+// Tasks
+async function loadTasks() {
+  try {
+    let url = '/tasks?limit=100';
+    if (providerFilter !== 'all') url += `&provider=${providerFilter}`;
+    const res = await apiFetch(url);
+    const data = await res.json();
+    tasks = data.tasks || [];
+    renderTasks();
+    document.getElementById('conn-status').className = 'status-dot ok';
+    document.getElementById('conn-text').textContent = 'Connected';
+  } catch (e) {
+    document.getElementById('conn-status').className = 'status-dot err';
+    document.getElementById('conn-text').textContent = 'Disconnected';
+  }
+}
+
+function renderTasks() {
+  const filtered = statusFilter === 'all' ? tasks : tasks.filter(t => t.status === statusFilter);
+  const tbody = document.getElementById('task-body');
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-dim); padding: 24px;">No tasks found</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(t => `
+    <tr onclick="selectTask('${t.task_id}')" class="${selectedTask === t.task_id ? 'selected' : ''}">
+      <td><span class="badge ${t.status}">${t.status}</span></td>
+      <td><span class="provider-badge ${t.provider}">${t.provider}</span></td>
+      <td>${t.project}</td>
+      <td style="color: var(--text-dim); font-size: 11px;">${t.task_id}</td>
+      <td style="color: var(--text-dim); font-size: 11px;">${formatTime(t.submitted_at)}</td>
+    </tr>
+  `).join('');
+}
+
+async function selectTask(taskId) {
+  selectedTask = taskId;
+  renderTasks();
+
+  const panel = document.getElementById('task-detail');
+  panel.innerHTML = '<p style="color: var(--text-dim);">Loading...</p>';
+  panel.classList.remove('hidden');
+
+  try {
+    const res = await apiFetch(`/tasks/${taskId}`);
+    const t = await res.json();
+
+    panel.innerHTML = `
+      <h3>${t.task_id}</h3>
+      <div class="detail-meta">
+        <div class="detail-meta-item"><span class="label">Status:</span> <span class="badge ${t.status}">${t.status}</span></div>
+        <div class="detail-meta-item"><span class="label">Provider:</span> <span class="provider-badge ${t.provider}">${t.provider}</span></div>
+        <div class="detail-meta-item"><span class="label">Project:</span> ${t.project}</div>
+        <div class="detail-meta-item"><span class="label">Git:</span> ${t.git_status || '-'}</div>
+        <div class="detail-meta-item"><span class="label">Submitted:</span> ${formatTime(t.submitted_at)}</div>
+        <div class="detail-meta-item"><span class="label">Started:</span> ${formatTime(t.started_at)}</div>
+        <div class="detail-meta-item"><span class="label">Completed:</span> ${formatTime(t.completed_at)}</div>
+        <div class="detail-meta-item"><span class="label">Exit code:</span> ${t.exit_code ?? '-'}</div>
+      </div>
+      ${t.commits ? `<div class="detail-meta-item" style="margin-bottom: 8px;"><span class="label">Commits:</span><pre style="margin-top: 4px; color: var(--green); font-size: 11px;">${escapeHtml(t.commits)}</pre></div>` : ''}
+      <label style="color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">Prompt</label>
+      <div class="detail-prompt">${escapeHtml(t.prompt || '')}</div>
+      <label style="color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">Output</label>
+      <div class="detail-output">${escapeHtml(t.output || '(no output yet)')}</div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<p style="color: var(--red);">Failed to load task: ${e.message}</p>`;
+  }
+}
+
+// Filters
+function setFilter(f, btn) {
+  statusFilter = f;
+  document.querySelectorAll('.filters .filter-btn').forEach((b, i) => {
+    if (i < 5) b.classList.toggle('active', b === btn);
+  });
+  renderTasks();
+}
+
+function setProviderFilter(f, btn) {
+  providerFilter = f;
+  document.querySelectorAll('.filters .filter-btn').forEach((b, i) => {
+    if (i >= 6) b.classList.toggle('active', b === btn);
+  });
+  loadTasks();
+}
+
+// Helpers
+function formatTime(iso) {
+  if (!iso || iso === 'None') return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return iso;
+  }
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>
