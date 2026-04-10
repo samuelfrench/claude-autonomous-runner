@@ -29,8 +29,9 @@ while [ $# -gt 0 ]; do
 done
 set -- "${ARGS[@]}"
 
-if [ $# -lt 2 ]; then
-    echo "Usage: clawd <project> \"<task description>\" [--provider claude|codex]"
+if [ $# -lt 1 ]; then
+    echo "Usage: clawd <project> \"<task description>\" [--provider claude|codex|ollama]"
+    echo "       clawd <project> --auto  (use autonomous goal from config)"
     echo ""
     echo "Available projects:"
     jq -r 'keys[]' "$CONFIG_FILE" | sed 's/^/  - /'
@@ -39,7 +40,34 @@ fi
 
 PROJECT=$1
 shift
-PROMPT="$*"
+
+# Check for --auto flag: use autonomous goal from config
+if [ "${1:-}" = "--auto" ] || [ "${1:-}" = "-a" ]; then
+    AUTO_GOAL=$(jq -r ".[\"$PROJECT\"].autonomous.goal // empty" "$CONFIG_FILE")
+    if [ -z "$AUTO_GOAL" ]; then
+        echo "Error: No autonomous goal configured for '$PROJECT'"
+        exit 1
+    fi
+    PROMPT="You are an autonomous agent working toward this goal: ${AUTO_GOAL}
+
+Read TODO.md to see what has been done and what remains. Pick the single highest-leverage task that moves toward the goal. Do it. Update TODO.md to reflect what you did and what should come next.
+
+Rules:
+- One focused task per run. Do it well rather than doing many things poorly.
+- Always commit and push your changes.
+- Do NOT repeat work already marked done in TODO.md.
+- If TODO.md does not exist, create it with a prioritized roadmap for the goal.
+- If you believe the goal has been reached, update TODO.md to say so and describe maintenance tasks."
+elif [ $# -lt 1 ]; then
+    echo "Usage: clawd <project> \"<task description>\" [--provider claude|codex|ollama]"
+    echo "       clawd <project> --auto  (use autonomous goal from config)"
+    echo ""
+    echo "Available projects:"
+    jq -r 'keys[]' "$CONFIG_FILE" | sed 's/^/  - /'
+    exit 1
+else
+    PROMPT="$*"
+fi
 TASK_ID="task-$(date +%Y%m%d-%H%M%S)-$$"
 
 # Validate project exists
@@ -51,17 +79,17 @@ if ! jq -e ".[\"$PROJECT\"]" "$CONFIG_FILE" > /dev/null 2>&1; then
 fi
 
 # Validate provider
-if [ "$PROVIDER" != "claude" ] && [ "$PROVIDER" != "codex" ]; then
-    echo "Error: Unknown provider '$PROVIDER'. Use 'claude' or 'codex'."
+if [ "$PROVIDER" != "claude" ] && [ "$PROVIDER" != "codex" ] && [ "$PROVIDER" != "ollama" ]; then
+    echo "Error: Unknown provider '$PROVIDER'. Use 'claude', 'codex', or 'ollama'."
     exit 1
 fi
 
 # Choose queue based on provider
-if [ "$PROVIDER" = "codex" ]; then
-    QUEUE_URL="$CLAWD_CODEX_QUEUE_URL"
-else
-    QUEUE_URL="$CLAWD_QUEUE_URL"
-fi
+case "$PROVIDER" in
+    codex)  QUEUE_URL="$CLAWD_CODEX_QUEUE_URL" ;;
+    ollama) QUEUE_URL="$CLAWD_OLLAMA_QUEUE_URL" ;;
+    *)      QUEUE_URL="$CLAWD_QUEUE_URL" ;;
+esac
 
 SUBMITTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -90,4 +118,4 @@ echo "  Project:  $PROJECT"
 echo "  Provider: $PROVIDER"
 echo "  Prompt:   $PROMPT"
 echo ""
-echo "Email notification when complete."
+echo "Email notification -> your configured email when complete."

@@ -194,12 +194,37 @@ $CODEX_OUTPUT"
     # Autonomous mode: re-queue follow-up task if enabled for this project
     AUTO_ENABLED=$(jq -r ".[\"$PROJECT\"].autonomous.enabled // false" "$CONFIG_FILE")
     if [ "$AUTO_ENABLED" = "true" ]; then
-        AUTO_GOAL=$(jq -r ".[\"$PROJECT\"].autonomous.goal" "$CONFIG_FILE")
+        # Use codex-specific goal if available, fall back to generic goal
+        AUTO_GOAL=$(jq -r ".[\"$PROJECT\"].autonomous.codex_goal // .[\"$PROJECT\"].autonomous.goal" "$CONFIG_FILE")
         COOLDOWN=$(jq -r ".[\"$PROJECT\"].autonomous.cooldown_minutes // 10" "$CONFIG_FILE")
+
+        # Failure counter: halt after 5 consecutive failures
+        FAILURE_FILE="/tmp/clawd-auto-failures-codex-${PROJECT}"
+        if [ "$DYNAMO_STATUS" = "completed" ]; then
+            echo 0 > "$FAILURE_FILE"
+            log "Autonomous: task succeeded, resetting failure counter"
+        else
+            PREV_FAILURES=$(cat "$FAILURE_FILE" 2>/dev/null || echo 0)
+            FAILURES=$((PREV_FAILURES + 1))
+            echo "$FAILURES" > "$FAILURE_FILE"
+            log "Autonomous: task failed ($FAILURES consecutive failures)"
+            if [ "$FAILURES" -ge 5 ]; then
+                log "Autonomous: HALTING — 5 consecutive failures. Manual intervention required."
+                send_email "[clawd-bot/codex] $PROJECT: autonomous HALTED" \
+                    "Autonomous loop halted after $FAILURES consecutive failures.\nLast task: $TASK_ID\nReset with: echo 0 > $FAILURE_FILE"
+                sleep 10
+                continue
+            fi
+        fi
+
         DELAY_SECONDS=$((COOLDOWN * 60))
-        # SQS max delay is 900s (15min)
-        if [ "$DELAY_SECONDS" -gt 900 ]; then
-            DELAY_SECONDS=900
+        SQS_DELAY=$DELAY_SECONDS
+        # SQS max delay is 900s (15min) — sleep the remainder
+        if [ "$SQS_DELAY" -gt 900 ]; then
+            SLEEP_SECONDS=$((DELAY_SECONDS - 900))
+            SQS_DELAY=900
+            log "Autonomous: sleeping ${SLEEP_SECONDS}s before queuing (SQS max delay is 900s)"
+            sleep "$SLEEP_SECONDS"
         fi
         NEXT_TASK_ID="task-$(date +%Y%m%d-%H%M%S)-auto"
 
@@ -231,7 +256,7 @@ Rules:
         SEND_RESULT=$(aws sqs send-message \
             --queue-url "$QUEUE_URL" \
             --message-body "$NEXT_MESSAGE" \
-            --delay-seconds "$DELAY_SECONDS" \
+            --delay-seconds "$SQS_DELAY" \
             --region "$REGION" 2>&1) || {
             log "ERROR: re-queue failed: $SEND_RESULT"
             # Retry once without delay
@@ -242,7 +267,7 @@ Rules:
         }
 
         SEND_MSG_ID=$(echo "$SEND_RESULT" | jq -r '.MessageId // "unknown"' 2>/dev/null)
-        log "Autonomous: queued follow-up $NEXT_TASK_ID for $PROJECT (visible in ${COOLDOWN}m, msgId=$SEND_MSG_ID)"
+        log "Autonomous: queued follow-up $NEXT_TASK_ID for $PROJECT (failures=$(cat "$FAILURE_FILE"), msgId=$SEND_MSG_ID)"
     else
         # Brief cooldown between manual tasks
         sleep 10

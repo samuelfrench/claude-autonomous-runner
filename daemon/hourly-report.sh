@@ -42,7 +42,7 @@ UPTIME=$(systemctl show clawd-runner --property=ActiveEnterTimestamp --value 2>/
 CODEX_DAEMON_STATUS=$(systemctl is-active codex-runner 2>/dev/null || echo "not installed")
 
 # Auth status
-AUTH_STATUS=$(/home/ec2-user/.local/bin/claude auth status 2>&1 | jq -r '.loggedIn // "unknown"' 2>/dev/null || echo "check failed")
+AUTH_STATUS=$(claude auth status 2>&1 | jq -r '.loggedIn // "unknown"' 2>/dev/null || echo "check failed")
 
 # Last hour of task activity from journal
 RECENT_TASKS=$(journalctl -u clawd-runner --since "1 hour ago" --no-pager 2>/dev/null \

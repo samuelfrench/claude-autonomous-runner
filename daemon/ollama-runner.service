@@ -1,0 +1,18 @@
+[Unit]
+Description=Clawd Bot - Ollama/Aider Local Task Runner
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/clawd-bot/daemon/ollama-runner.sh
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="OLLAMA_HOST=http://127.0.0.1:11434"
+
+[Install]
+WantedBy=default.target

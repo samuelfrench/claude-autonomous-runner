@@ -5,8 +5,13 @@
     "autonomous": {
       "enabled": true,
       "goal": "Your autonomous goal here. The agent reads TODO.md, picks the highest-leverage task, does it, and re-queues itself.",
-      "cooldown_minutes": 30,
-      "effort": "high"
+      "codex_goal": "Optional separate goal for Codex provider runs. Falls back to 'goal' if not set.",
+      "cooldown_minutes": 10,
+      "effort": "medium",
+      "sandbox": {
+        "enabled": false,
+        "allowed_paths": ["safe-dir/", "RESULTS.md", "TODO.md"]
+      }
     }
   }
 }
