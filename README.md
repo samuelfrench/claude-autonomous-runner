@@ -180,6 +180,39 @@ Claude Code uses OAuth tokens that expire. A local cron job syncs credentials to
 0 */4 * * * /path/to/infrastructure/sync-auth.sh >> /tmp/clawd-sync-auth.log 2>&1
 ```
 
+If you have a long-lived `CLAUDE_CODE_OAUTH_TOKEN` instead, drop it into `~/.clawd-env` on the bot host and the runner will detect it (`OAuth token detected — auth state: long-lived`) and stop alerting on token-expiry warnings.
+
+## Resilience
+
+The runners are built to absorb transient failures without halting the autonomous loop:
+
+- **Rate-limit + AUP-refusal handling**: Anthropic's `RateLimitError` and policy-refusal responses are detected and treated as transient — they don't increment the failure counter or halt the loop. The next tick retries cleanly.
+- **Quota-limit detection**: weekly quota exhaustion is recognised in the output and surfaces as a separate halt class so you can distinguish "ran out of credits" from "code is broken".
+- **SIGTERM requeue**: if the runner is interrupted mid-task (deploy, OOM, host restart), the in-flight task is re-queued to SQS instead of being lost.
+- **NTP boot-race fix**: the systemd unit waits on `time-sync.target` so AWS API calls don't fail with `SignatureDoesNotMatch` on first boot.
+- **GitHub email-privacy `noreply` author**: if your account has "block pushes that expose your private email" turned on, set `BOT_GIT_NAME` / `BOT_GIT_EMAIL` env vars (e.g. `12345+youruser@users.noreply.github.com`) and aider's commits will route through the noreply address automatically.
+- **Aider `verify_cmd` gate**: per-project `verify_cmd` (e.g. `npm test`) — aider runs it after each edit and reverts the commit if it fails. Catches silent no-op edits and bad search/replace blocks.
+
+## Outreach module (optional)
+
+`daemon/outreach/` is a self-contained Python toolkit for autonomous reputation-safe email outreach (cold pitch + reply lanes), wired to its own SQS-less timer-driven runner (`daemon/outreach-runner.{sh,service,timer}`).
+
+What it ships:
+
+- Multi-layer pre-send address verifier (syntax → DDB do-not-contact → SES suppression → MX → outlet-page substring → optional Hunter.io). The outlet-page substring check is the canonical defence against LLM hallucinations of plausible-but-fictional addresses.
+- SES inbound parser Lambda (`infrastructure/lambda/outreach-mail-parser/`) that handles bounce DSNs (hard 5.x.x → immediate DNC; soft 4.x.x → 3-in-7d threshold) and STOP / unsubscribe replies (auto-DNC).
+- Bounce-rate kill switch in the runner — halts at 3% (SES suspends at 5%), self-clears after a 24h cooldown if no fresh suppressions remain in window.
+- 30-day cold-pitch dedup window so an LLM planner with no cross-tick memory can't pitch the same recipient twice.
+- Sliding-window per-channel rate limiter (default email cap: 15 cold/day).
+
+What it does NOT ship: a targeting list, campaign content, or a system prompt. Bring your own — see `daemon/outreach-mandate.example.md` for a template that fills in your project name, niche, and opt-out wording.
+
+To deploy: copy `outreach-mandate.example.md` to `outreach-mandate.md` (with your details), provision the DynamoDB table from `infrastructure/outreach-dynamodb-schema.json`, attach `infrastructure/outreach-iam-policy.json` (substitute your account ID + SES domain), wire the Lambda + S3 trigger, then start the timer:
+
+```bash
+sudo systemctl enable --now outreach-runner.timer
+```
+
 ## Monitoring
 
 - **Hourly reports**: SES email with daemon health, queue depth, auth status

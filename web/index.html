@@ -56,7 +56,8 @@
   .provider-toggle { display: flex; gap: 0; }
   .provider-btn { padding: 6px 16px; cursor: pointer; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); font-family: var(--font); font-size: 12px; }
   .provider-btn:first-child { border-radius: 6px 0 0 6px; }
-  .provider-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .provider-btn:not(:first-child) { border-left: none; }
+  .provider-btn:last-child { border-radius: 0 6px 6px 0; }
   .provider-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
   .submit-btn { background: var(--green); color: var(--bg); border: none; padding: 8px 20px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 6px; }
   .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -78,6 +79,7 @@
   .provider-badge { font-size: 11px; color: var(--text-dim); }
   .provider-badge.claude { color: var(--purple); }
   .provider-badge.codex { color: var(--green); }
+  .provider-badge.ollama { color: var(--yellow); }
 
   /* Task Detail */
   .detail-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-top: 16px; }
@@ -142,6 +144,7 @@
         <div class="provider-toggle">
           <button class="provider-btn active" onclick="setProvider('claude', this)">Claude</button>
           <button class="provider-btn" onclick="setProvider('codex', this)">Codex</button>
+          <button class="provider-btn" onclick="setProvider('ollama', this)">Ollama</button>
         </div>
       </div>
       <div class="form-group">
@@ -163,6 +166,7 @@
         <button class="filter-btn" onclick="setProviderFilter('all', this)">All</button>
         <button class="filter-btn" onclick="setProviderFilter('claude', this)">Claude</button>
         <button class="filter-btn" onclick="setProviderFilter('codex', this)">Codex</button>
+        <button class="filter-btn" onclick="setProviderFilter('ollama', this)">Ollama</button>
         <span class="refresh-info" id="refresh-info">Auto-refresh: 30s</span>
       </div>
 

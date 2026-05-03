@@ -13,7 +13,7 @@ ROLE_NAME="clawd-bot-role"
 PROFILE_NAME="clawd-bot-profile"
 KEY_NAME="clawd-bot"
 INSTANCE_TYPE="t3a.medium"
-VPC_ID="${AWS_VPC_ID:?Set AWS_VPC_ID}"
+VPC_ID="vpc-1c348b66"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 GREEN='\033[0;32m'
@@ -69,7 +69,33 @@ CODEX_QUEUE_URL=$(aws sqs create-queue \
     --query 'QueueUrl' --output text)
 log "Codex Queue: $CODEX_QUEUE_URL"
 
-# --- Step 2c: DynamoDB Table ---
+# --- Step 2c: Ollama SQS Queues ---
+OLLAMA_DLQ_NAME="clawd-bot-tasks-ollama-dlq"
+OLLAMA_QUEUE_NAME="clawd-bot-tasks-ollama"
+
+log "Creating Ollama DLQ: $OLLAMA_DLQ_NAME"
+OLLAMA_DLQ_URL=$(aws sqs create-queue \
+    --queue-name "$OLLAMA_DLQ_NAME" \
+    --attributes '{"MessageRetentionPeriod":"1209600"}' \
+    --region "$REGION" \
+    --query 'QueueUrl' --output text)
+OLLAMA_DLQ_ARN=$(aws sqs get-queue-attributes \
+    --queue-url "$OLLAMA_DLQ_URL" \
+    --attribute-names QueueArn \
+    --region "$REGION" \
+    --query 'Attributes.QueueArn' --output text)
+log "Ollama DLQ: $OLLAMA_DLQ_URL"
+
+log "Creating Ollama queue: $OLLAMA_QUEUE_NAME"
+OLLAMA_REDRIVE="{\\\"deadLetterTargetArn\\\":\\\"${OLLAMA_DLQ_ARN}\\\",\\\"maxReceiveCount\\\":\\\"3\\\"}"
+OLLAMA_QUEUE_URL=$(aws sqs create-queue \
+    --queue-name "$OLLAMA_QUEUE_NAME" \
+    --attributes "{\"VisibilityTimeout\":\"14400\",\"MessageRetentionPeriod\":\"1209600\",\"RedrivePolicy\":\"${OLLAMA_REDRIVE}\"}" \
+    --region "$REGION" \
+    --query 'QueueUrl' --output text)
+log "Ollama Queue: $OLLAMA_QUEUE_URL"
+
+# --- Step 2d: DynamoDB Table ---
 log "Creating DynamoDB table: $DYNAMO_TABLE"
 aws dynamodb create-table \
     --table-name "$DYNAMO_TABLE" \
@@ -208,8 +234,8 @@ log "AMI: $AMI_ID"
 log "Waiting 15s for IAM propagation..."
 sleep 15
 
-# --- Step 9: Launch Instance ---
-log "Launching instance ($INSTANCE_TYPE)..."
+# --- Step 9: Launch Spot Instance ---
+log "Launching spot instance ($INSTANCE_TYPE)..."
 USER_DATA=$(base64 -w0 "$SCRIPT_DIR/user-data.sh")
 
 INSTANCE_ID=$(aws ec2 run-instances \
@@ -239,6 +265,8 @@ CLAWD_QUEUE_URL=$QUEUE_URL
 CLAWD_DLQ_URL=$DLQ_URL
 CLAWD_CODEX_QUEUE_URL=$CODEX_QUEUE_URL
 CLAWD_CODEX_DLQ_URL=$CODEX_DLQ_URL
+CLAWD_OLLAMA_QUEUE_URL=$OLLAMA_QUEUE_URL
+CLAWD_OLLAMA_DLQ_URL=$OLLAMA_DLQ_URL
 CLAWD_DYNAMO_TABLE=$DYNAMO_TABLE
 CLAWD_INSTANCE_ID=$INSTANCE_ID
 CLAWD_PUBLIC_IP=$PUBLIC_IP

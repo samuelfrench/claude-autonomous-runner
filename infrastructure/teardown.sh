@@ -24,13 +24,13 @@ if [ -n "${CLAWD_INSTANCE_ID:-}" ]; then
 fi
 
 # Delete SQS queues
-for Q in clawd-bot-tasks clawd-bot-tasks-dlq clawd-bot-tasks-codex clawd-bot-tasks-codex-dlq; do
+for Q in clawd-bot-tasks clawd-bot-tasks-dlq clawd-bot-tasks-codex clawd-bot-tasks-codex-dlq clawd-bot-tasks-ollama clawd-bot-tasks-ollama-dlq; do
     URL=$(aws sqs get-queue-url --queue-name "$Q" --region "$REGION" --query 'QueueUrl' --output text 2>/dev/null) || continue
     log "Deleting queue: $Q"
     aws sqs delete-queue --queue-url "$URL" --region "$REGION" 2>/dev/null || true
 done
 
-# Delete security group
+# Delete security group (may need a moment after instance termination)
 SG_ID=$(aws ec2 describe-security-groups \
     --filters "Name=group-name,Values=clawd-bot-sg" \
     --region "$REGION" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null) || true
@@ -79,7 +79,7 @@ fi
 # Delete CloudFront distribution (must be disabled first)
 if [ -n "${CLAWD_CF_ID:-}" ]; then
     log "Disabling CloudFront distribution $CLAWD_CF_ID (manual deletion may be needed)"
-    echo "CloudFront distributions must be disabled before deletion — check the AWS console"
+    warn "CloudFront distributions must be disabled before deletion — check the AWS console"
 fi
 
 # Delete S3 bucket

@@ -33,6 +33,17 @@ if [ -n "${CLAWD_CODEX_QUEUE_URL:-}" ]; then
     echo "Codex Queue:   $CODEX_PENDING pending, $CODEX_IN_FLIGHT in-flight"
 fi
 
+# Ollama queue stats
+if [ -n "${CLAWD_OLLAMA_QUEUE_URL:-}" ]; then
+    OLLAMA_ATTRS=$(aws sqs get-queue-attributes \
+        --queue-url "$CLAWD_OLLAMA_QUEUE_URL" \
+        --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+        --region "$CLAWD_REGION" --output json)
+    OLLAMA_PENDING=$(echo "$OLLAMA_ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessages')
+    OLLAMA_IN_FLIGHT=$(echo "$OLLAMA_ATTRS" | jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible')
+    echo "Ollama Queue:  $OLLAMA_PENDING pending, $OLLAMA_IN_FLIGHT in-flight"
+fi
+
 # DLQ stats
 DLQ_ATTRS=$(aws sqs get-queue-attributes \
     --queue-url "$CLAWD_DLQ_URL" \
@@ -51,6 +62,11 @@ echo "Instance: $CLAWD_INSTANCE_ID ($STATE)"
 echo "IP:       $CLAWD_PUBLIC_IP"
 echo "SSH:      ssh -i clawd-bot.pem ec2-user@$CLAWD_PUBLIC_IP"
 echo "Logs:     ssh -i clawd-bot.pem ec2-user@$CLAWD_PUBLIC_IP journalctl -u clawd-runner -f"
+
+echo ""
+echo "Local Runners:"
+OLLAMA_STATUS=$(systemctl --user is-active ollama-runner 2>/dev/null || echo "not installed")
+echo "  ollama-runner: $OLLAMA_STATUS"
 
 # Recent tasks from DynamoDB
 echo ""
@@ -83,3 +99,17 @@ echo "$TASKS" | jq -r '.Items[] | "  \(.task_id.S)  \(.project.S)  \(.status.S) 
 echo ""
 echo "Codex:"
 echo "$CODEX_TASKS" | jq -r '.Items[] | "  \(.task_id.S)  \(.project.S)  \(.status.S)  \(.submitted_at.S)"' 2>/dev/null || echo "  (none)"
+
+echo ""
+echo "Ollama:"
+OLLAMA_TASKS=$(aws dynamodb query \
+    --table-name "${CLAWD_DYNAMO_TABLE:-clawd-bot-tasks}" \
+    --index-name provider-submitted-index \
+    --key-condition-expression "provider = :p" \
+    --expression-attribute-values '{":p":{"S":"ollama"}}' \
+    --scan-index-forward false \
+    --limit 5 \
+    --projection-expression "task_id, project, #s, submitted_at" \
+    --expression-attribute-names '{"#s":"status"}' \
+    --region "$CLAWD_REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+echo "$OLLAMA_TASKS" | jq -r '.Items[] | "  \(.task_id.S)  \(.project.S)  \(.status.S)  \(.submitted_at.S)"' 2>/dev/null || echo "  (none)"

@@ -1,0 +1,51 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamoDBOutreachTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan",
+        "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:<AWS_ACCOUNT_ID>:table/clawd-bot-outreach",
+        "arn:aws:dynamodb:us-east-1:<AWS_ACCOUNT_ID>:table/clawd-bot-outreach/index/*",
+        "arn:aws:dynamodb:us-east-1:<AWS_ACCOUNT_ID>:table/clawd-bot-outreach-dryrun",
+        "arn:aws:dynamodb:us-east-1:<AWS_ACCOUNT_ID>:table/clawd-bot-outreach-dryrun/index/*"
+      ]
+    },
+    {
+      "Sid": "SSMReadOutreachPrefix",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+      "Resource": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/clawd-bot/outreach/*"
+    },
+    {
+      "Sid": "S3InboundMail",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"],
+      "Resource": [
+        "arn:aws:s3:::clawd-bot-outreach-mail",
+        "arn:aws:s3:::clawd-bot-outreach-mail/*"
+      ]
+    },
+    {
+      "Sid": "SESSendFromOutreachDomain",
+      "Effect": "Allow",
+      "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+      "Resource": "arn:aws:ses:us-east-1:<AWS_ACCOUNT_ID>:identity/example.com",
+      "Condition": {
+        "StringEquals": {"ses:FromAddress": "hello@example.com"}
+      }
+    },
+    {
+      "Sid": "BedrockInvoke",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": "*"
+    }
+  ]
+}

@@ -44,7 +44,30 @@ send_email() {
         --region "$REGION" 2>/dev/null || log "WARNING: email send failed"
 }
 
-trap 'log "Shutting down..."; exit 0' SIGTERM SIGINT
+CURRENT_TASK_ID=""
+CURRENT_RECEIPT=""
+cleanup() {
+    log "Shutting down..."
+    if [ -n "$CURRENT_TASK_ID" ]; then
+        log "Requeuing $CURRENT_TASK_ID: resetting SQS visibility + marking DDB pending"
+        # Reset SQS visibility to 0 so the message is immediately available for
+        # redelivery. Without this, a mid-flight kill leaves the message invisible
+        # for the full 7200s timeout before any runner can pick it up again.
+        if [ -n "$CURRENT_RECEIPT" ]; then
+            aws sqs change-message-visibility \
+                --queue-url "$QUEUE_URL" \
+                --receipt-handle "$CURRENT_RECEIPT" \
+                --visibility-timeout 0 \
+                --region "$REGION" 2>/dev/null || log "WARNING: SQS visibility reset failed"
+        fi
+        dynamo_update "$CURRENT_TASK_ID" \
+            "SET #s = :s, interrupted_at = :t" \
+            '{"#s":"status"}' \
+            "{\":s\":{\"S\":\"pending\"},\":t\":{\"S\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+    fi
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
 
 while true; do
     # Long-poll SQS (20s wait)
@@ -63,6 +86,8 @@ while true; do
     PROMPT=$(echo "$BODY" | jq -r '.prompt')
     TASK_ID=$(echo "$BODY" | jq -r '.task_id // "unknown"')
 
+    CURRENT_TASK_ID="$TASK_ID"
+    CURRENT_RECEIPT="$RECEIPT"
     log "=== Task: $TASK_ID | Project: $PROJECT ==="
     log "Prompt: $PROMPT"
 
@@ -189,6 +214,8 @@ $CODEX_OUTPUT"
         --receipt-handle "$RECEIPT" \
         --region "$REGION"
 
+    CURRENT_TASK_ID=""
+    CURRENT_RECEIPT=""
     log "=== Task complete: $TASK_ID ==="
 
     # Autonomous mode: re-queue follow-up task if enabled for this project

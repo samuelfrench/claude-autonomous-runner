@@ -44,7 +44,30 @@ send_email() {
         --region "$REGION" 2>/dev/null || log "WARNING: email send failed"
 }
 
-trap 'log "Shutting down..."; exit 0' SIGTERM SIGINT
+CURRENT_TASK_ID=""
+CURRENT_RECEIPT=""
+cleanup() {
+    log "Shutting down..."
+    if [ -n "$CURRENT_TASK_ID" ]; then
+        log "Requeuing $CURRENT_TASK_ID: resetting SQS visibility + marking DDB pending"
+        # Reset SQS visibility to 0 so the message is immediately available for
+        # redelivery. Without this, a mid-flight kill leaves the message invisible
+        # for the full 10800s timeout before any runner can pick it up again.
+        if [ -n "$CURRENT_RECEIPT" ]; then
+            aws sqs change-message-visibility \
+                --queue-url "$QUEUE_URL" \
+                --receipt-handle "$CURRENT_RECEIPT" \
+                --visibility-timeout 0 \
+                --region "$REGION" 2>/dev/null || log "WARNING: SQS visibility reset failed"
+        fi
+        dynamo_update "$CURRENT_TASK_ID" \
+            "SET #s = :s, interrupted_at = :t" \
+            '{"#s":"status"}' \
+            "{\":s\":{\"S\":\"pending\"},\":t\":{\"S\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+    fi
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
 
 while true; do
     # Long-poll SQS (20s wait)
@@ -63,14 +86,16 @@ while true; do
     PROMPT=$(echo "$BODY" | jq -r '.prompt')
     TASK_ID=$(echo "$BODY" | jq -r '.task_id // "unknown"')
 
+    CURRENT_TASK_ID="$TASK_ID"
+    CURRENT_RECEIPT="$RECEIPT"
     log "=== Task: $TASK_ID | Project: $PROJECT ==="
     log "Prompt: $PROMPT"
 
-    # Extend visibility timeout to 2 hours
+    # Extend visibility timeout to 3 hours (matches --timeout below)
     aws sqs change-message-visibility \
         --queue-url "$QUEUE_URL" \
         --receipt-handle "$RECEIPT" \
-        --visibility-timeout 7200 \
+        --visibility-timeout 10800 \
         --region "$REGION" 2>/dev/null || true
 
     # Record task start in DynamoDB
@@ -107,28 +132,60 @@ while true; do
 
     # Run Claude
     EFFORT=$(jq -r ".[\"$PROJECT\"].autonomous.effort // \"medium\"" "$CONFIG_FILE")
-    log "Running claude -p (model=sonnet, effort=$EFFORT) ..."
+    MODEL=$(jq -r ".[\"$PROJECT\"].autonomous.model // \"sonnet\"" "$CONFIG_FILE")
+
+    # Diagnostic: log which auth is in effect so we can correlate failures with
+    # token state later. Long-lived CLAUDE_CODE_OAUTH_TOKEN takes precedence
+    # over .credentials.json for Claude CLI; when set, there's no expiry to track.
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+        TOKEN_MIN_REMAINING=99999
+        log "Auth: long-lived CLAUDE_CODE_OAUTH_TOKEN (no expiry)"
+    else
+        TOKEN_EXPIRES_MS=$(jq -r '.claudeAiOauth.expiresAt // 0' "$HOME/.claude/.credentials.json" 2>/dev/null || echo 0)
+        NOW_MS=$(($(date +%s) * 1000))
+        if [ "$TOKEN_EXPIRES_MS" -gt 0 ]; then
+            TOKEN_MIN_REMAINING=$(( (TOKEN_EXPIRES_MS - NOW_MS) / 60000 ))
+            log "Auth: OAuth access token, expires in ${TOKEN_MIN_REMAINING}m"
+            if [ "$TOKEN_MIN_REMAINING" -lt 90 ]; then
+                log "WARNING: token has <90m before expiry and task can run up to 180m — may expire mid-task"
+            fi
+        else
+            TOKEN_MIN_REMAINING=0
+            log "WARNING: no CLAUDE_CODE_OAUTH_TOKEN and no valid .credentials.json — auth likely broken"
+        fi
+    fi
+
+    log "Running claude -p (model=$MODEL, effort=$EFFORT, timeout=10800s/3h) ..."
+    TASK_START_EPOCH=$(date +%s)
     OUTPUT_FILE=$(mktemp /tmp/clawd-XXXXXX)
     EXIT_CODE=0
-    timeout 7200 claude -p "$PROMPT" \
+    timeout 10800 claude -p "$PROMPT" \
         --dangerously-skip-permissions \
         --output-format text \
-        --model sonnet \
+        --model "$MODEL" \
         --effort "$EFFORT" \
-        --tools "Bash,Edit,Read,Write,Glob,Grep" \
+        --tools "Bash,Edit,Read,Write,Glob,Grep,Task" \
         > "$OUTPUT_FILE" 2>&1 || EXIT_CODE=$?
 
+    TASK_END_EPOCH=$(date +%s)
+    DURATION_SEC=$((TASK_END_EPOCH - TASK_START_EPOCH))
+    DURATION_MIN=$((DURATION_SEC / 60))
     CLAUDE_OUTPUT=$(head -c 50000 "$OUTPUT_FILE")
     rm -f "$OUTPUT_FILE"
 
     if [ "$EXIT_CODE" -eq 0 ]; then
         STATUS="completed"
     elif [ "$EXIT_CODE" -eq 124 ]; then
-        STATUS="timed out (2h limit)"
+        STATUS="timed out (3h limit)"
     else
         STATUS="failed (exit $EXIT_CODE)"
     fi
-    log "Claude status: $STATUS"
+    log "Claude status: $STATUS | duration=${DURATION_SEC}s (${DURATION_MIN}m) | model=$MODEL effort=$EFFORT"
+
+    # Diagnostic: warn if task ran >80% of timeout (suggests we may need to bump further)
+    if [ "$DURATION_SEC" -gt 8640 ]; then
+        log "WARNING: task used ${DURATION_SEC}s (>80% of 10800s timeout) — consider bumping --timeout further"
+    fi
 
     # Determine DynamoDB status value
     case "$STATUS" in
@@ -167,9 +224,9 @@ while true; do
     OUTPUT_JSON=$(printf '%s' "$CLAUDE_OUTPUT" | head -c 50000 | jq -Rs .)
     COMMITS_JSON=$(printf '%s' "$COMMITS_VAL" | jq -Rs .)
     dynamo_update "$TASK_ID" \
-        "SET #s = :s, completed_at = :t, #o = :o, git_status = :g, commits = :c, exit_code = :e" \
+        "SET #s = :s, completed_at = :t, #o = :o, git_status = :g, commits = :c, exit_code = :e, duration_sec = :d, model = :m, effort = :f, token_min_at_start = :tok" \
         '{"#s":"status","#o":"output"}' \
-        "{\":s\":{\"S\":\"$DYNAMO_STATUS\"},\":t\":{\"S\":\"$COMPLETED_AT\"},\":o\":{\"S\":$OUTPUT_JSON},\":g\":{\"S\":\"$GIT_STATUS_VAL\"},\":c\":{\"S\":$COMMITS_JSON},\":e\":{\"N\":\"$EXIT_CODE\"}}"
+        "{\":s\":{\"S\":\"$DYNAMO_STATUS\"},\":t\":{\"S\":\"$COMPLETED_AT\"},\":o\":{\"S\":$OUTPUT_JSON},\":g\":{\"S\":\"$GIT_STATUS_VAL\"},\":c\":{\"S\":$COMMITS_JSON},\":e\":{\"N\":\"$EXIT_CODE\"},\":d\":{\"N\":\"$DURATION_SEC\"},\":m\":{\"S\":\"$MODEL\"},\":f\":{\"S\":\"$EFFORT\"},\":tok\":{\"N\":\"${TOKEN_MIN_REMAINING:-0}\"}}"
 
     # Send notification
     send_email "[clawd-bot] $PROJECT: $STATUS" \
@@ -193,22 +250,81 @@ $CLAUDE_OUTPUT"
         --receipt-handle "$RECEIPT" \
         --region "$REGION"
 
+    CURRENT_TASK_ID=""
+    CURRENT_RECEIPT=""
     log "=== Task complete: $TASK_ID ==="
+
+    # Detect Claude Max 5-hour quota exhaustion / rate-limiting in the CLI output.
+    # These are transient (window rolls over) and should NOT count against the
+    # halt-after-N-failures counter — just sleep long enough for the window to
+    # reopen and retry, using the existing SQS-delay + in-process-sleep machinery.
+    QUOTA_EXHAUSTED=false
+    if [ "$DYNAMO_STATUS" != "completed" ]; then
+        if echo "$CLAUDE_OUTPUT" | grep -qiE '5-hour limit|usage limit reached|hit your (usage )?limit|rate[_ -]?limit|429|quota (exceeded|exhaust)|please try again in|reset(s|ting)? (at|in|on)|reset(s|ting)? [A-Z][a-z]+ ?[0-9]|try again at'; then
+            QUOTA_EXHAUSTED=true
+            log "Claude output matched quota/rate-limit pattern — transient, not counted as failure"
+        fi
+    fi
+
+    # Detect Anthropic Usage Policy / AUP / content-filter refusals. The CLI exits
+    # non-zero in seconds with "API Error: ... violate our Usage Policy ...".
+    # These are NOT runtime bugs and tend to be persistent until the prompt or
+    # model changes — counting them as regular failures halts the loop after 8
+    # back-to-back attempts (Apr 27 incident). Treat them as a long-sleep event:
+    # don't increment the failure counter, sleep 4h, and email the user once so
+    # they can switch model or rephrase.
+    POLICY_REFUSAL=false
+    if [ "$DYNAMO_STATUS" != "completed" ] && [ "$QUOTA_EXHAUSTED" = "false" ]; then
+        if echo "$CLAUDE_OUTPUT" | grep -qiE 'usage policy|violate.*[Uu]sage|API Error.*unable to respond|anthropic\.com/legal/aup'; then
+            POLICY_REFUSAL=true
+            log "Claude output matched policy-refusal pattern (AUP/content filter) — not counted as failure"
+        fi
+    fi
 
     # Autonomous mode: re-queue follow-up task on success OR failure (with backoff)
     AUTO_ENABLED=$(jq -r ".[\"$PROJECT\"].autonomous.enabled // false" "$CONFIG_FILE")
     FAILURE_FILE="/tmp/clawd-auto-failures-${PROJECT}"
-    MAX_CONSECUTIVE_FAILURES=5
+    MAX_CONSECUTIVE_FAILURES=8
+    QUOTA_SLEEP_MINUTES=60
 
     if [ "$AUTO_ENABLED" = "true" ]; then
         AUTO_GOAL=$(jq -r ".[\"$PROJECT\"].autonomous.goal" "$CONFIG_FILE")
         COOLDOWN=$(jq -r ".[\"$PROJECT\"].autonomous.cooldown_minutes // 10" "$CONFIG_FILE")
 
         if [ "$DYNAMO_STATUS" = "completed" ]; then
-            # Success — reset failure counter, use normal cooldown
+            # Success — reset failure counter + clear one-shot policy alert flag,
+            # use normal cooldown
             echo 0 > "$FAILURE_FILE"
+            rm -f "/tmp/clawd-policy-alerted-${PROJECT}"
             DELAY_SECONDS=$((COOLDOWN * 60))
             log "Autonomous: task succeeded, resetting failure counter"
+        elif [ "$QUOTA_EXHAUSTED" = "true" ]; then
+            # Quota exhausted — long flat sleep, do NOT increment failure counter.
+            # Claude Max 5-hour windows are rolling; one hour is usually enough
+            # to reopen. If still quota-limited after 1h, next loop will re-detect
+            # and sleep again — so the bot rides out the window indefinitely
+            # without ever hitting MAX_CONSECUTIVE_FAILURES.
+            DELAY_SECONDS=$((QUOTA_SLEEP_MINUTES * 60))
+            log "Autonomous: quota exhausted — sleeping ${QUOTA_SLEEP_MINUTES}m before retry (failure counter unchanged)"
+        elif [ "$POLICY_REFUSAL" = "true" ]; then
+            # AUP / content-filter refusal. Persistent until prompt or model
+            # changes, but still treat as transient: long sleep, no halt. Email
+            # the user once per project so they can intervene.
+            DELAY_SECONDS=$((4 * 60 * 60))
+            log "Autonomous: policy refusal — sleeping 4h before retry (failure counter unchanged). Switch autonomous.model in projects.json if persistent."
+            POLICY_ALERT_FILE="/tmp/clawd-policy-alerted-${PROJECT}"
+            if [ ! -f "$POLICY_ALERT_FILE" ]; then
+                send_email "[clawd-bot] $PROJECT: policy refusal (autonomous loop continues)" \
+                    "Claude refused the autonomous prompt as a Usage Policy violation. The autonomous loop is continuing with 4-hour retries — it will NOT halt — but real progress requires switching model or rephrasing.
+
+Last task: $TASK_ID
+Model: $MODEL
+Output (first 1KB):
+$(echo "$CLAUDE_OUTPUT" | head -c 1000)
+
+To fix: change autonomous.model in clawd-bot/config/projects.json (Sonnet typically passes where Opus refuses), commit, and pull on EC2."
+                touch "$POLICY_ALERT_FILE"
+            fi
         else
             # Failure — increment counter, back off
             FAIL_COUNT=$(cat "$FAILURE_FILE" 2>/dev/null || echo 0)

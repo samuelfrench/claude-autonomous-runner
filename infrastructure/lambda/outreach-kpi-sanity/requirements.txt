@@ -1,0 +1,2 @@
+# infrastructure/lambda/outreach-kpi-sanity/requirements.txt
+# (empty — boto3 is in runtime)

@@ -11,6 +11,7 @@ table = dynamodb.Table(os.environ["DYNAMO_TABLE"])
 
 CLAUDE_QUEUE_URL = os.environ["CLAUDE_QUEUE_URL"]
 CODEX_QUEUE_URL = os.environ["CODEX_QUEUE_URL"]
+OLLAMA_QUEUE_URL = os.environ["OLLAMA_QUEUE_URL"]
 API_KEY = os.environ["API_KEY"]
 VALID_PROJECTS = json.loads(os.environ.get("PROJECTS", "[]"))
 
@@ -40,8 +41,8 @@ def handler(event, context):
 
     if not project or not prompt:
         return response(400, {"error": "project and prompt are required"})
-    if provider not in ("claude", "codex"):
-        return response(400, {"error": "provider must be 'claude' or 'codex'"})
+    if provider not in ("claude", "codex", "ollama"):
+        return response(400, {"error": "provider must be 'claude', 'codex', or 'ollama'"})
     if VALID_PROJECTS and project not in VALID_PROJECTS:
         return response(400, {"error": f"Unknown project: {project}"})
 
@@ -61,7 +62,12 @@ def handler(event, context):
     )
 
     # Send to SQS
-    queue_url = CODEX_QUEUE_URL if provider == "codex" else CLAUDE_QUEUE_URL
+    if provider == "codex":
+        queue_url = CODEX_QUEUE_URL
+    elif provider == "ollama":
+        queue_url = OLLAMA_QUEUE_URL
+    else:
+        queue_url = CLAUDE_QUEUE_URL
     sqs.send_message(
         QueueUrl=queue_url,
         MessageBody=json.dumps(

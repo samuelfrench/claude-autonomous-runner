@@ -4,9 +4,9 @@ set -euo pipefail
 REGION="us-east-1"
 EMAIL="${NOTIFICATION_EMAIL:-your-email@example.com}"
 DYNAMO_TABLE="clawd-bot-tasks"
-CREDS_FILE="$HOME/.claude/.credentials.json"
-CONFIG_FILE="$HOME/clawd-bot/config/projects.json"
-ENV_FILE="$HOME/.clawd-env"
+CREDS_FILE="/home/ec2-user/.claude/.credentials.json"
+CONFIG_FILE="/home/ec2-user/clawd-bot/config/projects.json"
+ENV_FILE="/home/ec2-user/.clawd-env"
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 
@@ -107,7 +107,7 @@ if [ "$FAILED" -gt 0 ]; then
   * AUTH: Token may be expiring faster than the 4h sync interval.
     ACTION: Re-authenticate Claude on your local machine (claude login).
     The cron sync will push it to EC2 within 4 hours, or run:
-    ~/clawd-bot/infrastructure/sync-auth.sh"
+    /home/sam/claude-workspace/clawd-bot/infrastructure/sync-auth.sh"
     fi
 
     if echo "$ALL_OUTPUT" | grep -qi "fal\|FAL_KEY\|image.*generat\|fal\.ai"; then

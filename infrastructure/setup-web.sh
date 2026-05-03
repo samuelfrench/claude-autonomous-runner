@@ -9,6 +9,7 @@ S3_BUCKET="clawd-bot-web-${ACCOUNT_ID}"
 DYNAMO_TABLE="clawd-bot-tasks"
 CLAUDE_QUEUE_URL="https://sqs.us-east-1.amazonaws.com/${ACCOUNT_ID}/clawd-bot-tasks"
 CODEX_QUEUE_URL="https://sqs.us-east-1.amazonaws.com/${ACCOUNT_ID}/clawd-bot-tasks-codex"
+OLLAMA_QUEUE_URL="https://sqs.us-east-1.amazonaws.com/${ACCOUNT_ID}/clawd-bot-tasks-ollama"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_DIR="$SCRIPT_DIR/../web"
 
@@ -84,7 +85,7 @@ sleep 10
 # --- Step 2: Package and Create Lambda Functions ---
 PROJECTS_LIST=$(jq -c 'keys' "$SCRIPT_DIR/../config/projects.json")
 
-LAMBDA_ENV="{\"Variables\":{\"DYNAMO_TABLE\":\"$DYNAMO_TABLE\",\"CLAUDE_QUEUE_URL\":\"$CLAUDE_QUEUE_URL\",\"CODEX_QUEUE_URL\":\"$CODEX_QUEUE_URL\",\"API_KEY\":\"$API_KEY\",\"PROJECTS\":$(echo "$PROJECTS_LIST" | jq -Rs .)}}"
+LAMBDA_ENV="{\"Variables\":{\"DYNAMO_TABLE\":\"$DYNAMO_TABLE\",\"CLAUDE_QUEUE_URL\":\"$CLAUDE_QUEUE_URL\",\"CODEX_QUEUE_URL\":\"$CODEX_QUEUE_URL\",\"OLLAMA_QUEUE_URL\":\"$OLLAMA_QUEUE_URL\",\"API_KEY\":\"$API_KEY\",\"PROJECTS\":$(echo "$PROJECTS_LIST" | jq -Rs .)}}"
 
 TMPDIR=$(mktemp -d)
 
@@ -124,6 +125,7 @@ log "Lambda functions deployed"
 # --- Step 3: API Gateway HTTP API ---
 log "Creating API Gateway: $API_NAME"
 
+# Check if API already exists
 EXISTING_API=$(aws apigatewayv2 get-apis --region "$REGION" \
     --query "Items[?Name=='$API_NAME'].ApiId" --output text 2>/dev/null || echo "")
 
@@ -208,13 +210,16 @@ aws s3api create-bucket \
     --bucket "$S3_BUCKET" \
     --region "$REGION" 2>/dev/null || warn "Bucket already exists"
 
+# Block public access (CloudFront will use OAC)
 aws s3api put-public-access-block \
     --bucket "$S3_BUCKET" \
     --public-access-block-configuration \
     "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true" \
     --region "$REGION"
 
+# Upload index.html with API URL injected
 if [ -f "$WEB_DIR/index.html" ]; then
+    # Replace API_URL placeholder
     sed "s|__API_URL__|${API_URL}|g" "$WEB_DIR/index.html" | \
     aws s3 cp - "s3://${S3_BUCKET}/index.html" \
         --content-type "text/html" \
@@ -227,6 +232,7 @@ fi
 # --- Step 5: CloudFront Distribution ---
 log "Creating CloudFront distribution..."
 
+# Create OAC for S3 access
 OAC_ID=$(aws cloudfront create-origin-access-control \
     --origin-access-control-config "{
         \"Name\": \"clawd-bot-oac\",
@@ -269,6 +275,7 @@ CF_CONFIG=$(cat <<CFEOF
 CFEOF
 )
 
+# Check for existing distribution
 EXISTING_CF=$(aws cloudfront list-distributions \
     --query "DistributionList.Items[?Comment=='Clawd-bot web dashboard'].Id" \
     --output text 2>/dev/null || echo "")
@@ -285,6 +292,7 @@ else
     CF_ID=$(echo "$CF_RESULT" | jq -r '.Distribution.Id')
     CF_DOMAIN=$(echo "$CF_RESULT" | jq -r '.Distribution.DomainName')
 
+    # Add S3 bucket policy to allow CloudFront access
     BUCKET_POLICY=$(cat <<BPEOF
 {
     "Version": "2012-10-17",

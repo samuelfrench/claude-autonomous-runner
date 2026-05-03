@@ -1,0 +1,19 @@
+# daemon/outreach-runner.service
+[Unit]
+Description=Clawd Bot - Outreach Runner (one-shot per tick, fired by .timer)
+After=network-online.target time-sync.target
+Wants=time-sync.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/outreach-runner-workdir
+Environment="HOME=/home/ec2-user"
+Environment="PATH=/home/ec2-user/outreach-venv/bin:/home/ec2-user/.local/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-/home/ec2-user/.clawd-env
+ExecStart=/home/ec2-user/clawd-bot/daemon/outreach-runner.sh
+StandardOutput=append:/var/log/outreach-runner.log
+StandardError=append:/var/log/outreach-runner.log
+
+[Install]
+WantedBy=multi-user.target

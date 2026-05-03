@@ -21,3 +21,9 @@ chmod +x "$SCRIPT_DIR/hourly-report.sh"
 CRON_LINE="0 * * * * $SCRIPT_DIR/hourly-report.sh >> /tmp/clawd-hourly-report.log 2>&1"
 (crontab -l 2>/dev/null | grep -v 'hourly-report.sh' || true; echo "$CRON_LINE") | crontab -
 echo "Hourly report cron installed."
+
+# Install daily effectiveness report cron (9am UTC = 5am ET)
+chmod +x "$SCRIPT_DIR/daily-effectiveness-report.sh"
+DAILY_CRON="0 9 * * * $SCRIPT_DIR/daily-effectiveness-report.sh >> /tmp/clawd-daily-report.log 2>&1"
+(crontab -l 2>/dev/null | grep -v 'daily-effectiveness-report.sh' || true; echo "$DAILY_CRON") | crontab -
+echo "Daily effectiveness report cron installed (9am UTC)."

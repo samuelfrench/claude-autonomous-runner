@@ -1,0 +1,2 @@
+# infrastructure/lambda/outreach-mail-parser/requirements.txt
+# (empty — boto3 + email are stdlib/runtime)

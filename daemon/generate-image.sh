@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage: generate-image.sh "prompt text" /path/to/output/dir [checkpoint_model]
 
 COMFYUI_API="http://127.0.0.1:8188"
-COMFYUI_OUTPUT="${COMFYUI_OUTPUT_DIR:-$HOME/ComfyUI/output}"
+COMFYUI_OUTPUT="/home/sam/claude-workspace/ComfyUI/output"
 DEFAULT_CHECKPOINT="sd_xl_base_1.0.safetensors"
 POLL_INTERVAL=2
 TIMEOUT=300

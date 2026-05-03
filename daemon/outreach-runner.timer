@@ -1,0 +1,12 @@
+# daemon/outreach-runner.timer
+[Unit]
+Description=Run outreach-runner on a tight cadence (2 min cooldown after each tick)
+
+[Timer]
+OnBootSec=30sec
+OnUnitActiveSec=2min
+RandomizedDelaySec=15
+Unit=outreach-runner.service
+
+[Install]
+WantedBy=timers.target

@@ -4,3 +4,15 @@
 .credentials.json
 .clawd-env
 .codex-env
+
+# Python (outreach toolkit)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

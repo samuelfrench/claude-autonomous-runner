@@ -48,10 +48,11 @@ if [ -n "$OPENAI_KEY" ]; then
     echo "OPENAI_API_KEY=$OPENAI_KEY" > "$BOT_HOME/.codex-env"
     chmod 600 "$BOT_HOME/.codex-env"
     chown "$BOT_USER:$BOT_USER" "$BOT_HOME/.codex-env"
+    # Also set up codex auth
     su - "$BOT_USER" -c "export OPENAI_API_KEY='$OPENAI_KEY' && printenv OPENAI_API_KEY | codex login --with-api-key" 2>/dev/null || true
 fi
 
-# Clone your fork of this repo
+# Clone clawd-bot repo
 su - "$BOT_USER" -c 'git clone git@github.com:YOUR_USERNAME/claude-autonomous-runner.git "$HOME/clawd-bot"'
 
 # Create projects directory
